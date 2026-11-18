@@ -1,0 +1,126 @@
+"""Colour palette, resolved once per theme change.
+
+Qt reports the desktop's light/dark preference through the application palette,
+so we derive from that rather than probing each OS separately. Every widget
+takes its colours from a Palette instance, which keeps the dark variant from
+drifting out of sync with the light one.
+"""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass
+
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication
+
+from ..core.compute import TIER_COLORS
+
+
+@dataclass(frozen=True)
+class Palette:
+    dark: bool
+    surface: QColor          # toast / panel background
+    surface_alt: QColor      # inset rows
+    text: QColor
+    text_muted: QColor
+    border: QColor
+    track: QColor            # unfilled part of a progress bar or ring
+    shadow: QColor
+
+    def tier(self, name: str) -> QColor:
+        return QColor(TIER_COLORS.get(name, TIER_COLORS["green"]))
+
+
+LIGHT = Palette(
+    dark=False,
+    surface=QColor(252, 252, 253),
+    surface_alt=QColor(242, 243, 245),
+    text=QColor(24, 26, 30),
+    text_muted=QColor(110, 116, 126),
+    border=QColor(0, 0, 0, 28),
+    track=QColor(0, 0, 0, 38),
+    shadow=QColor(0, 0, 0, 90),
+)
+
+DARK = Palette(
+    dark=True,
+    surface=QColor(32, 34, 38),
+    surface_alt=QColor(44, 47, 52),
+    text=QColor(238, 240, 243),
+    text_muted=QColor(150, 156, 166),
+    border=QColor(255, 255, 255, 30),
+    track=QColor(255, 255, 255, 34),
+    shadow=QColor(0, 0, 0, 160),
+)
+
+
+def is_dark() -> bool:
+    """True when the desktop is using a dark theme.
+
+    Falls back to light when there is no application yet (offscreen tests, the
+    CLI), which is the safer default: light text on a light card is unreadable,
+    dark-on-dark merely looks flat.
+    """
+    app = QApplication.instance()
+    if app is None:
+        return False
+    window = app.palette().color(QPalette.ColorRole.Window)
+    return window.lightness() < 128
+
+
+def current() -> Palette:
+    return DARK if is_dark() else LIGHT
+
+
+# Windows keeps two independent colour modes: "apps", which Qt's palette follows,
+# and "Windows", which the taskbar follows. The tray icon is painted onto the
+# taskbar, so it has to ask the second one.
+PERSONALIZE_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+
+
+def _winreg():
+    """Seam, so the registry branch can be driven on any OS."""
+    import winreg
+
+    return winreg
+
+
+def _system_uses_light_theme() -> int | None:
+    try:
+        winreg = _winreg()
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, PERSONALIZE_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, "SystemUsesLightTheme")
+    except (ImportError, OSError):
+        # No winreg off Windows; no value before Windows 10 1903.
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def taskbar_is_dark() -> bool:
+    """True when the surface the tray icon sits on is dark.
+
+    Only Windows separates this from the app theme. With Apps=Light and
+    Windows=Dark, taking the app answer paints a black-on-black track ring that
+    all but vanishes - worst of all before the first poll, when the track is
+    nearly the whole icon. Elsewhere the app palette is the best signal there is.
+    """
+    if sys.platform == "win32":
+        value = _system_uses_light_theme()
+        if value is not None:
+            return value == 0
+    return is_dark()
+
+
+def taskbar() -> Palette:
+    """Palette for the tray icon. Panels and toasts keep using :func:`current`."""
+    return DARK if taskbar_is_dark() else LIGHT
+
+
+# Bundled family first; system families cover unsupported glyphs.
+FONT_STACK = '"Pretendard", "Noto Sans CJK KR", "Malgun Gothic", sans-serif'
+MONO_STACK = '"Cascadia Mono", Consolas, "SF Mono", "JetBrains Mono", ' \
+             '"Noto Sans Mono", "DejaVu Sans Mono", monospace'

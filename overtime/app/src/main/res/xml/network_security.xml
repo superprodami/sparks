@@ -1,0 +1,7 @@
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">ehr.raynen.cn</domain>
+        <domain includeSubdomains="false">oa.raynen.cn</domain>
+    </domain-config>
+</network-security-config>

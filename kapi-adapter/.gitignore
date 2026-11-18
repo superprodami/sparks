@@ -1,0 +1,8 @@
+**/build/
+__pycache__/
+*.class
+*.apk
+*.apk.idsig
+*.jks
+/taobao-bridge/assets/bootstrap.sh
+/taobao-bridge/src/cn/local/kapitb/BuildConfig.java

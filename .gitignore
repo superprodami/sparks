@@ -1,0 +1,9 @@
+/Reader/*
+!/Reader/README.md
+!/Reader/py/
+/Reader/py/*
+!/Reader/py/biquge345_download.py
+/TomatoDownloader/*
+!/TomatoDownloader/README.md
+/tokentray-codex/.github/
+/kapi-adapter/reference/

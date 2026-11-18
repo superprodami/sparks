@@ -1,0 +1,31 @@
+plugins {
+    id 'com.android.application' version '8.9.2'
+}
+
+android {
+    namespace 'local.overtime'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'local.overtime'
+        minSdk 27
+        targetSdk 35
+        versionCode 13
+        versionName '1.4.3'
+    }
+
+    buildTypes {
+        debug {
+            debuggable false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    implementation 'androidx.work:work-runtime:2.10.5'
+}

@@ -1,0 +1,43 @@
+[build-system]
+requires = [
+    "setuptools>=68",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tokentray"
+version = "0.1.1"
+description = "Local Codex customization of TokenTray"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.28",
+    "keyring>=25",
+    "platformdirs>=4.3",
+    "pyside6>=6.8",
+    "rich>=13",
+    "tomli-w>=1.0",
+    "typer>=0.15",
+]
+
+[project.scripts]
+tokentray = "tokentray.cli:main"
+
+[project.gui-scripts]
+tokentray-gui = "tokentray.app:main"
+
+[project.optional-dependencies]
+build = ["pyinstaller==6.22.3"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = [
+    "src",
+]
+
+[tool.setuptools.package-data]
+tokentray = [
+    "resources/**/*",
+]
