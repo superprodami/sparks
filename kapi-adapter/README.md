@@ -4,11 +4,11 @@
 
 ## 安装
 
-1. 安装下文构建好的适配模块。需要咔皮记账 1.30.01、SukiSU Root 和 Vector。淘宝 10.65.0 已验证。
+1. 从 [Release](https://github.com/superprodami/sparks/releases/tag/kapi-adapter-v1.0.4) 下载并安装 Kapi-Adapter-1.0.4.apk。需要咔皮记账 1.30.01、SukiSU Root 和 Vector。淘宝 10.65.0 已验证。
 2. 给模块 Root 权限。打开模块点「启用并应用」，Vector 作用域只选淘宝。系统设置里允许模块自启动，电池设为「无限制」。
 3. 保持咔皮的自动记账和无障碍服务开启。打开已支付订单详情，展开订单信息，在浮窗里核对并确认。卸载前先点「停用并恢复」。
 
-## 自己构建
+## 从源码构建（可选）
 
 在 Windows 上准备 Python 3.10+（命令为 python）、JDK 17、Android SDK 35 和 Build Tools 35.0.0，设置 JAVA_HOME 和 ANDROID_HOME。
 
