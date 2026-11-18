@@ -24,7 +24,7 @@ final class AttendanceHeatmap extends LinearLayout {
     private static final int MUTED = 0xff526862;
     private static final int NO_RECORD = 0xffe5e8e6;
     private static final int NO_OVERTIME = 0xffcee6d4;
-    private static final int OVERTIME = 0xff287354;
+    private static final int OVERTIME = 0xff8ab59c;
     private static final String[] WEEKDAYS = {"周一", "周二", "周三", "周四", "周五", "周六", "周日"};
     private final HorizontalScrollView scroll;
     private final int contentWidth;
@@ -72,7 +72,7 @@ final class AttendanceHeatmap extends LinearLayout {
                 int minutes = punch == null ? Overtime.MISSING : Overtime.minutes(date, punch.arrival, punch.departure);
                 int color = punch == null ? NO_RECORD : minutes > 0 ? OVERTIME : NO_OVERTIME;
                 String overtime = overtimeLabel(punch, minutes);
-                TextView cell = label(Integer.toString(date.getDayOfMonth()), 12, minutes > 0 ? Color.WHITE : INK);
+                TextView cell = label(Integer.toString(date.getDayOfMonth()), 12, INK);
                 cell.setGravity(Gravity.CENTER);
                 cell.setTag(color);
                 cell.setContentDescription(date + " 加班时长 " + overtime);

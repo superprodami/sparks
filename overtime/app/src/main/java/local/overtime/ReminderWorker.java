@@ -28,8 +28,10 @@ import java.io.IOException;
 import java.security.GeneralSecurityException;
 import java.time.LocalDate;
 import java.time.LocalTime;
+import java.time.YearMonth;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -37,11 +39,18 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 public final class ReminderWorker extends Worker {
-    private static final String WORK = "daily-attendance-reminder";
-    private static final String CHANNEL = "attendance";
+    private static final String REFRESH_WORK = "daily-attendance-reminder";
+    private static final String PUNCH_WORK = "workday-punch-reminder";
+    private static final String REFRESH_CHANNEL = "attendance";
+    private static final String PUNCH_CHANNEL = "punch_reminder";
     private static final String SCHEDULE_MINUTES = "schedule_minutes";
-    private static final int DEFAULT_MINUTES = Overtime.REMINDER.toSecondOfDay() / 60;
+    private static final String REFRESH_MINUTES = "refresh_minutes";
+    private static final String PUNCH_MINUTES = "punch_minutes";
+    private static final String PUNCH_DATE = "punch_date";
+    private static final int DEFAULT_MINUTES = Overtime.REFRESH_TIME.toSecondOfDay() / 60;
+    private static final int DEFAULT_PUNCH_MINUTES = Overtime.PUNCH_REMINDER_TIME.toSecondOfDay() / 60;
     static final String OPEN_TODAY = "local.overtime.OPEN_TODAY";
+    static final String OPEN_DATE = "attendance_date";
     static final String LAST_SYNC = "last_sync";
     private static final DateTimeFormatter SYNC_TIME = DateTimeFormatter.ofPattern("M月d日 HH:mm");
 
@@ -52,16 +61,22 @@ public final class ReminderWorker extends Worker {
     static NotificationManager manager(Context context) {
         NotificationManager manager = context.getSystemService(NotificationManager.class);
         manager.createNotificationChannel(new NotificationChannel(
-                CHANNEL, "每日考勤更新", NotificationManager.IMPORTANCE_DEFAULT));
+                REFRESH_CHANNEL, "昨日考勤更新", NotificationManager.IMPORTANCE_DEFAULT));
+        manager.createNotificationChannel(new NotificationChannel(
+                PUNCH_CHANNEL, "工作日打卡提醒", NotificationManager.IMPORTANCE_DEFAULT));
         return manager;
     }
 
     static boolean allowed(Context context) {
-        NotificationManager manager = manager(context);
         return (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(
                 Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
-                && manager.areNotificationsEnabled()
-                && manager.getNotificationChannel(CHANNEL).getImportance() != NotificationManager.IMPORTANCE_NONE;
+                && manager(context).areNotificationsEnabled();
+    }
+
+    static boolean allowed(Context context, boolean punch) {
+        String channel = punch ? PUNCH_CHANNEL : REFRESH_CHANNEL;
+        return allowed(context) && manager(context).getNotificationChannel(channel).getImportance()
+                != NotificationManager.IMPORTANCE_NONE;
     }
 
     private static SharedPreferences settings(Context context) {
@@ -69,42 +84,101 @@ public final class ReminderWorker extends Worker {
     }
 
     static int scheduleMinutes(Context context) {
-        return settings(context).getInt(SCHEDULE_MINUTES, DEFAULT_MINUTES);
+        SharedPreferences prefs = settings(context);
+        int previous = prefs.getInt(SCHEDULE_MINUTES, DEFAULT_PUNCH_MINUTES);
+        return prefs.getInt(REFRESH_MINUTES, previous == DEFAULT_PUNCH_MINUTES ? DEFAULT_MINUTES : previous);
+    }
+
+    static int punchMinutes(Context context) {
+        return settings(context).getInt(PUNCH_MINUTES, DEFAULT_PUNCH_MINUTES);
     }
 
     static void ensureScheduled(Context context) {
-        boolean migrated = settings(context).contains(SCHEDULE_MINUTES);
-        schedule(context, migrated ? ExistingPeriodicWorkPolicy.KEEP : ExistingPeriodicWorkPolicy.UPDATE);
+        boolean migrated = settings(context).contains(REFRESH_MINUTES);
         if (!migrated) {
-            settings(context).edit().putInt(SCHEDULE_MINUTES, DEFAULT_MINUTES).apply();
+            settings(context).edit().putInt(REFRESH_MINUTES, scheduleMinutes(context)).apply();
+        }
+        scheduleRefresh(context, migrated ? ExistingPeriodicWorkPolicy.KEEP : ExistingPeriodicWorkPolicy.UPDATE);
+        if (noticeEnabled(context, true)) {
+            schedulePunch(context, ExistingPeriodicWorkPolicy.KEEP);
         }
     }
 
     static void changeTime(Context context, int minutes) {
-        if (settings(context).contains(SCHEDULE_MINUTES) && minutes == scheduleMinutes(context)) {
+        if (minutes == scheduleMinutes(context)) {
             return;
         }
-        settings(context).edit().putInt(SCHEDULE_MINUTES, minutes).apply();
-        schedule(context, ExistingPeriodicWorkPolicy.UPDATE);
+        settings(context).edit().putInt(REFRESH_MINUTES, minutes).apply();
+        scheduleRefresh(context, ExistingPeriodicWorkPolicy.UPDATE);
     }
 
-    private static androidx.work.Operation schedule(Context context, ExistingPeriodicWorkPolicy policy) {
+    static void changePunchTime(Context context, int minutes) {
+        if (minutes == punchMinutes(context)) {
+            return;
+        }
+        settings(context).edit().putInt(PUNCH_MINUTES, minutes).apply();
+        if (noticeEnabled(context, true)) {
+            schedulePunch(context, ExistingPeriodicWorkPolicy.UPDATE);
+        }
+    }
+
+    static boolean noticeEnabled(Context context, boolean punch) {
+        return settings(context).getBoolean(punch ? PUNCH_CHANNEL : REFRESH_CHANNEL, true);
+    }
+
+    static void setNoticeEnabled(Context context, boolean punch, boolean enabled) {
+        settings(context).edit().putBoolean(punch ? PUNCH_CHANNEL : REFRESH_CHANNEL, enabled).apply();
+        if (punch) {
+            if (enabled) {
+                schedulePunch(context, ExistingPeriodicWorkPolicy.KEEP);
+            } else {
+                WorkManager.getInstance(context).cancelUniqueWork(PUNCH_WORK);
+                manager(context).cancel(2);
+            }
+        } else if (!enabled) {
+            manager(context).cancel(1);
+        }
+    }
+
+    private static androidx.work.Operation scheduleRefresh(Context context, ExistingPeriodicWorkPolicy policy) {
         int minutes = scheduleMinutes(context);
         LocalTime time = LocalTime.of(minutes / 60, minutes % 60);
-        long next = Overtime.nextReminder(ZonedDateTime.now(Overtime.ZONE), time).toInstant().toEpochMilli();
+        ZonedDateTime next = Overtime.nextReminder(ZonedDateTime.now(Overtime.ZONE), time);
+        return schedule(context, REFRESH_WORK, policy, next,
+                new Data.Builder().putInt(SCHEDULE_MINUTES, minutes).build());
+    }
+
+    private static androidx.work.Operation schedulePunch(Context context, ExistingPeriodicWorkPolicy policy) {
+        int minutes = punchMinutes(context);
+        LocalTime time = LocalTime.of(minutes / 60, minutes % 60);
+        ZonedDateTime next = Overtime.nextPunchReminder(ZonedDateTime.now(Overtime.ZONE), time);
+        return schedule(context, PUNCH_WORK, policy, next,
+                new Data.Builder().putInt(SCHEDULE_MINUTES, minutes)
+                        .putString(PUNCH_DATE, next.toLocalDate().toString()).build());
+    }
+
+    private static androidx.work.Operation schedule(Context context, String work, ExistingPeriodicWorkPolicy policy,
+            ZonedDateTime next, Data input) {
         PeriodicWorkRequest request = new PeriodicWorkRequest.Builder(ReminderWorker.class, 1, TimeUnit.DAYS)
-                .setInputData(new Data.Builder().putInt(SCHEDULE_MINUTES, minutes).build())
-                .setNextScheduleTimeOverride(next)
+                .setInputData(input)
+                .setNextScheduleTimeOverride(next.toInstant().toEpochMilli())
                 .build();
-        return WorkManager.getInstance(context).enqueueUniquePeriodicWork(WORK, policy, request);
+        return WorkManager.getInstance(context).enqueueUniquePeriodicWork(work, policy, request);
     }
 
     @NonNull
     @Override
     public Result doWork() {
         Context context = getApplicationContext();
+        String punchDate = getInputData().getString(PUNCH_DATE);
+        boolean punch = punchDate != null;
+        int scheduledMinutes = getInputData().getInt(SCHEDULE_MINUTES, -1);
+        if (punch && (!noticeEnabled(context, true) || scheduledMinutes != punchMinutes(context))) {
+            return Result.success();
+        }
         try {
-            schedule(context, ExistingPeriodicWorkPolicy.UPDATE).getResult().get();
+            (punch ? schedulePunch(context, ExistingPeriodicWorkPolicy.UPDATE)
+                    : scheduleRefresh(context, ExistingPeriodicWorkPolicy.UPDATE)).getResult().get();
         } catch (InterruptedException stopped) {
             Thread.currentThread().interrupt();
             return Result.retry();
@@ -112,48 +186,60 @@ public final class ReminderWorker extends Worker {
             Log.e("AttendanceReminder", "Unable to schedule the next reminder", error);
             return Result.retry();
         }
-        if (getInputData().getInt(SCHEDULE_MINUTES, -1) != scheduleMinutes(context)) {
+        LocalDate today = Overtime.today();
+        if (punch) {
+            if (scheduledMinutes == punchMinutes(context)
+                    && today.toString().equals(punchDate) && !ChinaWorkCalendar.day(today).rest) {
+                notify(context, true, today, "记得检查今日是否打卡~", null);
+            }
             return Result.success();
         }
+        if (scheduledMinutes != scheduleMinutes(context)) {
+            return Result.success();
+        }
+        LocalDate yesterday = today.minusDays(1);
+        Records records = new Records(context);
+        String title;
         try {
-            LocalDate today = Overtime.today();
-            OaResult data = synchronizeOa(context, today);
-            notifySuccess(context, data.punches.get(today));
+            synchronizeOa(context, records, yesterday);
+            title = "昨日考勤更新成功";
         } catch (IOException error) {
             saveStatus(context, error.getMessage());
-            notify(context, "今日考勤更新失败", error.getMessage());
+            title = "昨日考勤更新失败";
         } catch (InterruptedException stopped) {
             Thread.currentThread().interrupt();
             return Result.retry();
         }
+        notify(context, false, yesterday, title, monthSummary(records, today));
         return Result.success();
     }
 
-    static String punchSummary(Records.Punch punch) {
-        if (punch == null || (punch.arrival == Overtime.MISSING && punch.departure == Overtime.MISSING)) {
-            return null;
+    private static String monthSummary(Records records, LocalDate today) {
+        YearMonth month = Overtime.period(today);
+        int total = 0;
+        for (Map.Entry<LocalDate, Records.Punch> entry : records.all()
+                .subMap(Overtime.start(month), true, Overtime.end(month), true).entrySet()) {
+            Records.Punch punch = entry.getValue();
+            int minutes = Overtime.minutes(entry.getKey(), punch.arrival, punch.departure);
+            if (minutes >= 0) {
+                total += minutes;
+            }
         }
-        return PunchTime.display(punch.arrival) + " -> "
-                + PunchTime.display(Overtime.departureOnWorkday(punch.departure));
+        return "本月时长 " + total / 60 + (total % 60 == 0 ? "" : ".5") + "h/20h";
     }
 
-    private void notifySuccess(Context context, Records.Punch punch) {
-        String times = punchSummary(punch);
-        if (times == null) {
-            notify(context, "今日考勤已更新，暂未获取数据", null);
-        } else {
-            notify(context, "今日考勤已更新", times);
-        }
-    }
-
-    private void notify(Context context, String title, String message) {
-        if (!allowed(context)) {
+    private void notify(Context context, boolean punch, LocalDate date, String title, String message) {
+        if (!noticeEnabled(context, punch) || !allowed(context, punch)) {
             return;
         }
-        Intent open = new Intent(context, MainActivity.class).setAction(OPEN_TODAY);
-        PendingIntent action = PendingIntent.getActivity(context, 0, open,
+        NotificationManager manager = manager(context);
+        String channel = punch ? PUNCH_CHANNEL : REFRESH_CHANNEL;
+        int id = punch ? 2 : 1;
+        Intent open = new Intent(context, MainActivity.class).setAction(OPEN_TODAY)
+                .putExtra(OPEN_DATE, (int) date.toEpochDay());
+        PendingIntent action = PendingIntent.getActivity(context, id, open,
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification notice = new Notification.Builder(context, CHANNEL)
+        Notification notice = new Notification.Builder(context, channel)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(title)
                 .setContentText(message)
@@ -161,7 +247,7 @@ public final class ReminderWorker extends Worker {
                 .setContentIntent(action)
                 .setAutoCancel(true)
                 .build();
-        manager(context).notify(1, notice);
+        manager.notify(id, notice);
     }
 
     static SharedPreferences state(Context context) {
@@ -173,18 +259,8 @@ public final class ReminderWorker extends Worker {
         state(context).edit().putString(LAST_SYNC, time + "  " + message).apply();
     }
 
-    static String describeSync(OaResult result, int days) {
-        LocalDate today = Overtime.today();
-        if (!result.covers(today) || !result.covers(today.minusDays(1))) {
-            return "OA 已读取 " + days + " 天，日期范围未覆盖今天和昨天";
-        }
-        if (days == 0 && !result.punches.containsKey(today) && !result.punches.containsKey(today.minusDays(1))) {
-            return "OA 尚未返回今天或昨天的日结果";
-        }
-        return "OA 已同步 " + days + " 天打卡";
-    }
-
-    private OaResult synchronizeOa(Context context, LocalDate today) throws IOException, InterruptedException {
+    private void synchronizeOa(Context context, Records records, LocalDate yesterday)
+            throws IOException, InterruptedException {
         OaCredentials credentials = new OaCredentials(context);
         OaCredentials.Account account;
         try {
@@ -198,15 +274,13 @@ public final class ReminderWorker extends Worker {
         Handler main = new Handler(Looper.getMainLooper());
         CompletableFuture<OaResult> result = new CompletableFuture<>();
         AtomicReference<OaSession> running = new AtomicReference<>();
-        LocalDate from = today.minusDays(1);
-        Records records = new Records(context);
-        LocalDate firstQuery = records.needsBoundaryRepair(from) ? from.minusDays(1) : from;
+        LocalDate firstQuery = records.needsBoundaryRepair(yesterday) ? yesterday.minusDays(1) : yesterday;
         main.post(() -> {
             if (result.isDone()) {
                 return;
             }
             try {
-                OaSession session = new OaSession(context, account, firstQuery, today, new OaSession.Listener() {
+                OaSession session = new OaSession(context, account, firstQuery, yesterday, new OaSession.Listener() {
                     @Override
                     public void status(String message) {}
 
@@ -232,12 +306,14 @@ public final class ReminderWorker extends Worker {
         });
         try {
             OaResult data = result.get(55, TimeUnit.SECONDS);
-            if (credentials.remembered()) {
-                int days = data.apply(records, from, today);
-                saveStatus(context, describeSync(data, days));
-                return data;
+            if (!credentials.remembered()) {
+                throw new IOException("OA 已退出登录");
             }
-            throw new IOException("OA 已退出登录");
+            if (!ChinaWorkCalendar.day(yesterday).rest && !data.punches.containsKey(yesterday)) {
+                throw new IOException("OA 尚未返回昨日考勤");
+            }
+            int days = data.apply(records, yesterday, yesterday);
+            saveStatus(context, data.describeImport(yesterday, yesterday, days, true));
         } catch (ExecutionException error) {
             throw new IOException(error.getCause().getMessage(), error);
         } catch (TimeoutException error) {

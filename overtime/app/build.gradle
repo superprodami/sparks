@@ -10,8 +10,8 @@ android {
         applicationId 'local.overtime'
         minSdk 27
         targetSdk 35
-        versionCode 13
-        versionName '1.4.3'
+        versionCode 24
+        versionName '1.5.9'
     }
 
     buildTypes {
@@ -27,5 +27,6 @@ android {
 }
 
 dependencies {
+    implementation 'androidx.viewpager:viewpager:1.0.0'
     implementation 'androidx.work:work-runtime:2.10.5'
 }

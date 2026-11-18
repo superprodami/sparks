@@ -1,30 +1,49 @@
 package local.overtime;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
+import android.app.Dialog;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.ClipDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.text.InputType;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
+import android.text.style.RelativeSizeSpan;
+import android.text.style.StyleSpan;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
 import android.view.WindowInsets;
 import android.widget.EditText;
+import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.NumberPicker;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.webkit.CookieManager;
+
+import androidx.viewpager.widget.PagerAdapter;
+import androidx.viewpager.widget.ViewPager;
 
 import org.json.JSONException;
 
@@ -34,29 +53,34 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.function.Consumer;
+import java.util.function.IntConsumer;
 
 public final class MainActivity extends Activity {
     private static final int NOTIFICATIONS = 12;
-    private static final DateTimeFormatter DATE_SHORT = DateTimeFormatter.ofPattern("M月d日");
+    private static final DateTimeFormatter DATE_SHORT = DateTimeFormatter.ofPattern("M.d");
     private static final DateTimeFormatter WEEKDAY = DateTimeFormatter.ofPattern("EEEE", Locale.SIMPLIFIED_CHINESE);
-    private static final int BG = 0xfff3f6f4;
+    private static final int BG = 0xfff8f8f2;
     private static final int WHITE = Color.WHITE;
-    private static final int INK = 0xff17312b;
-    private static final int MUTED = 0xff526862;
-    private static final int GREEN = 0xff166a55;
-    private static final int DARK_GREEN = 0xff153e34;
-    private static final int PALE = 0xffe7f1eb;
-    private static final int MINT = 0xffc7e8d6;
+    private static final int INK = 0xff182721;
+    private static final int MUTED = 0xff52625a;
+    private static final int GREEN = 0xff236749;
+    private static final int PALE = 0xffe7eee5;
+    private static final int LINE = 0xffdbe2d8;
+    private static final YearMonth FIRST_PICKABLE_MONTH = YearMonth.of(1900, 1);
+    private static final int MONTH_REFERENCE_MINUTES = 20 * 60;
     private static final String DATE_KEY = "selectedDay";
-    private static final String RANGE_KEY = "range";
     private static final String DETAIL_DATE_KEY = "detailDate";
     private static final String HEATMAP_OFFSET_KEY = "heatmapOffset";
 
-    private enum Range { DAY, MONTH, QUARTER }
+    private static final class MonthStats {
+        int minutes;
+        int days;
+    }
 
     private Records records;
     private OaCredentials credentials;
@@ -66,9 +90,9 @@ public final class MainActivity extends Activity {
     private ScrollView mainScroll;
     private AttendanceHeatmap heatmap;
     private int heatmapOffset;
+    private boolean revealDetail;
     private LocalDate selected;
     private LocalDate detailDate;
-    private Range range = Range.MONTH;
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -78,7 +102,6 @@ public final class MainActivity extends Activity {
         selected = saved == null ? Overtime.today() : LocalDate.parse(saved.getString(DATE_KEY));
         detailDate = saved == null ? Overtime.today() : LocalDate.parse(saved.getString(DETAIL_DATE_KEY, selected.toString()));
         if (saved != null) {
-            range = Range.valueOf(saved.getString(RANGE_KEY));
             heatmapOffset = saved.getInt(HEATMAP_OFFSET_KEY);
         }
         handleIntent(getIntent());
@@ -95,7 +118,6 @@ public final class MainActivity extends Activity {
     protected void onSaveInstanceState(Bundle out) {
         super.onSaveInstanceState(out);
         out.putString(DATE_KEY, selected.toString());
-        out.putString(RANGE_KEY, range.name());
         out.putString(DETAIL_DATE_KEY, detailDate.toString());
         out.putInt(HEATMAP_OFFSET_KEY, heatmap == null || !heatmap.isLaidOut()
                 ? heatmapOffset : heatmap.distanceFromEnd());
@@ -117,19 +139,19 @@ public final class MainActivity extends Activity {
 
     private void handleIntent(Intent intent) {
         if (ReminderWorker.OPEN_TODAY.equals(intent.getAction())) {
-            selected = Overtime.today();
+            selected = LocalDate.ofEpochDay(intent.getIntExtra(ReminderWorker.OPEN_DATE,
+                    (int) Overtime.today().toEpochDay()));
             detailDate = selected;
             heatmap = null;
             heatmapOffset = 0;
-            range = Range.DAY;
-            render();
+            revealDetail = true;
         }
     }
 
     private void render() {
         LocalDate today = Overtime.today();
         YearMonth month = Overtime.period(selected);
-        YearMonth quarter = Overtime.quarterStart(month);
+        YearMonth current = Overtime.period(today);
         NavigableMap<LocalDate, Records.Punch> punches = records.all();
         int verticalPosition = mainScroll == null ? 0 : mainScroll.getScrollY();
         if (heatmap != null && heatmap.isLaidOut()) {
@@ -138,6 +160,7 @@ public final class MainActivity extends Activity {
 
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
+        scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         scroll.setBackgroundColor(BG);
         scroll.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 35) {
@@ -149,40 +172,18 @@ public final class MainActivity extends Activity {
             return insets;
         });
         root = column();
-        root.setPadding(dp(20), dp(12), dp(20), dp(24));
+        root.setPadding(dp(18), dp(4), dp(18), dp(12));
         scroll.addView(root);
         setContentView(scroll);
         mainScroll = scroll;
-        scroll.post(() -> scroll.scrollTo(0, verticalPosition));
+        boolean showDetail = revealDetail;
+        revealDetail = false;
+        scroll.post(() -> scroll.scrollTo(0, showDetail ? scroll.getChildAt(0).getHeight() : verticalPosition));
 
         LinearLayout header = row();
-        TextView title = text("考勤记录", 29, INK, true);
-        header.addView(title, weight());
-        TextView refresh = action("刷新 OA", GREEN, PALE, this::refreshOa);
-        refresh.setEnabled(oaSession == null);
-        header.addView(refresh);
+        addIcon(header, R.drawable.ic_overview_menu, "打开设置侧边栏", this::showSettings);
+        header.addView(text("考勤统计", 20, INK, true), weight());
         root.addView(header);
-        TextView todayLabel = text(today.format(DateTimeFormatter.ISO_LOCAL_DATE)
-                + "  ·  " + today.format(WEEKDAY), 13, MUTED, false);
-        add(root, todayLabel, 4);
-
-        YearMonth current = Overtime.period(today);
-        LinearLayout hero = panel(DARK_GREEN, 22);
-        hero.addView(text("当前考勤月", 14, MINT, true));
-        hero.addView(text("还剩 " + Overtime.remaining(today) + " 天", 36, WHITE, true));
-        add(hero, text(dateSpan(Overtime.start(current), Overtime.end(current)), 14, MINT, false), 8);
-        add(root, hero, 18);
-
-        LinearLayout controls = row();
-        TextView importOa = action("OA 导入", WHITE, GREEN, this::showOaImport);
-        importOa.setEnabled(oaSession == null);
-        controls.addView(importOa, weight());
-        TextView addPunch = action("手动记录", GREEN, PALE, () -> edit(selected));
-        LinearLayout.LayoutParams addParams = weight();
-        addParams.leftMargin = dp(8);
-        controls.addView(addPunch, addParams);
-        add(root, controls, 12);
-        String lastSync = ReminderWorker.state(this).getString(ReminderWorker.LAST_SYNC, "");
         if (oaSession != null) {
             LinearLayout progress = row();
             ProgressBar spinner = new ProgressBar(this, null, android.R.attr.progressBarStyleSmall);
@@ -192,123 +193,366 @@ public final class MainActivity extends Activity {
             caption.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
             progress.addView(caption, weight());
             add(root, progress, 8);
-        } else if (!lastSync.isEmpty()) {
-            add(root, text(lastSync, 13, MUTED, false), 6);
         }
 
-        add(root, text("加班统计", 20, INK, true), 22);
-        LinearLayout tabs = row();
-        for (Range option : Range.values()) {
-            String label = option == Range.DAY ? "日" : option == Range.MONTH ? "月" : "季度";
-            TextView tab = action(label, option == range ? WHITE : MUTED,
-                    option == range ? DARK_GREEN : PALE, () -> {
-                        range = option;
-                        render();
-                    });
-            tab.setSelected(option == range);
-            LinearLayout.LayoutParams params = weight();
-            params.rightMargin = option == Range.QUARTER ? 0 : dp(6);
-            tabs.addView(tab, params);
-        }
-        add(root, tabs, 9);
-
-        LinearLayout summary = panel(WHITE, 18);
-        LinearLayout navigation = row();
-        TextView previous = action("‹", GREEN, PALE, () -> move(-1));
-        previous.setContentDescription("上一时段");
-        navigation.addView(previous);
-        String periodName = range == Range.DAY ? selected.format(DATE_SHORT)
-                : range == Range.MONTH ? month.getYear() + "年" + month.getMonthValue() + "月"
-                : month.getYear() + "年 第" + ((month.getMonthValue() - 1) / 3 + 1) + "季度";
-        navigation.addView(action(periodName, INK, WHITE, () -> pickDate(selected, date -> {
-            selected = date;
-            render();
-        })), weight());
-        TextView next = action("›", GREEN, PALE, () -> move(1));
-        next.setContentDescription("下一时段");
-        boolean future = range == Range.DAY ? !selected.isBefore(today)
-                : range == Range.MONTH ? !month.isBefore(current) : !quarter.isBefore(Overtime.quarterStart(current));
-        next.setEnabled(!future);
-        next.setAlpha(future ? 0.35f : 1f);
-        navigation.addView(next);
-        summary.addView(navigation);
-
-        LocalDate from = range == Range.DAY ? selected
-                : Overtime.start(range == Range.MONTH ? month : quarter);
-        LocalDate through = range == Range.DAY ? selected
-                : Overtime.end(range == Range.MONTH ? month : quarter.plusMonths(2));
-        NavigableMap<LocalDate, Records.Punch> shown = punches.subMap(from, true, through, true);
-        int total = 0;
-        int calculated = 0;
-        for (Map.Entry<LocalDate, Records.Punch> entry : shown.entrySet()) {
-            int minutes = minutes(entry.getKey(), entry.getValue());
-            if (minutes >= 0) {
-                total += minutes;
-                calculated++;
-            }
-        }
-        if (range == Range.DAY) {
-            Records.Punch punch = punches.get(selected);
-            String daySummary = punch == null ? "无"
-                    : clockOrDash(punch.arrival) + " - " + clockOrDash(punch.departure) + "："
-                    + AttendanceHeatmap.overtimeLabel(punch, minutes(selected, punch));
-            add(summary, text(daySummary, 20, DARK_GREEN, true), 10);
-            add(summary, text(dayDescription(selected), 13, MUTED, false), 4);
-        } else {
-            add(summary, text(calculated == 0 ? "—" : duration(total), 32, DARK_GREEN, true), 10);
-            add(summary, text(dateSpan(from, through) + "  ·  已统计 " + calculated + " 天", 13, MUTED, false), 4);
-        }
-        add(root, summary, 9);
-
-        add(root, text("打卡明细", 19, INK, true), 21);
+        add(root, periodPager(punches, today, month, current), 8);
+        add(root, text("打卡明细", 17, INK, true), 16);
         addAttendanceDetails(punches, today);
-        boolean reminder = ReminderWorker.allowed(this);
-        int syncTime = ReminderWorker.scheduleMinutes(this);
-        add(root, action("每日自动刷新  " + PunchTime.display(syncTime), GREEN, PALE,
-                () -> pickTime("每日自动刷新时间", syncTime, syncTime, minutes -> {
-                    ReminderWorker.changeTime(this, minutes);
-                    render();
-                })), 18);
-        add(root, action(reminder ? "通知设置" : "开启通知", GREEN, BG, this::notificationSettings), 3);
-        if (credentials.remembered()) {
-            add(root, action("OA 账号设置", GREEN, BG, this::showOaSettings), 3);
-        }
-        add(root, action("查看统计规则", GREEN, BG, this::showRules), 3);
     }
 
-    private void move(int direction) {
-        if (range == Range.DAY) {
-            selected = selected.plusDays(direction);
+    private ViewPager periodPager(NavigableMap<LocalDate, Records.Punch> punches, LocalDate today,
+            YearMonth shown, YearMonth current) {
+        YearMonth earliest = shown.isBefore(FIRST_PICKABLE_MONTH) ? shown : FIRST_PICKABLE_MONTH;
+        YearMonth firstRecord = punches.isEmpty() ? shown : Overtime.period(punches.firstKey());
+        YearMonth first = firstRecord.isBefore(earliest) ? firstRecord : earliest;
+        int count = (int) ChronoUnit.MONTHS.between(first, current) + 1;
+        ViewPager pager = new PeriodPager();
+        pager.setOverScrollMode(View.OVER_SCROLL_NEVER);
+        pager.setPageMargin(dp(8));
+        pager.setAdapter(new PagerAdapter() {
+            @Override
+            public int getCount() {
+                return count;
+            }
+
+            @Override
+            public Object instantiateItem(ViewGroup container, int position) {
+                LinearLayout card = periodCard(punches, today, first.plusMonths(position), current,
+                        position > 0, direction -> pager.setCurrentItem(
+                                position + direction, ValueAnimator.areAnimatorsEnabled()));
+                container.addView(card);
+                return card;
+            }
+
+            @Override
+            public void destroyItem(ViewGroup container, int position, Object card) {
+                container.removeView((View) card);
+            }
+
+            @Override
+            public boolean isViewFromObject(View view, Object card) {
+                return view == card;
+            }
+        });
+        pager.setCurrentItem((int) ChronoUnit.MONTHS.between(first, shown), false);
+        pager.addOnPageChangeListener(new ViewPager.SimpleOnPageChangeListener() {
+            @Override
+            public void onPageSelected(int position) {
+                YearMonth month = first.plusMonths(position);
+                selected = month.equals(current) ? today : Overtime.end(month);
+            }
+        });
+        return pager;
+    }
+
+    private LinearLayout periodCard(NavigableMap<LocalDate, Records.Punch> punches, LocalDate today,
+            YearMonth month, YearMonth current, boolean hasPrevious, IntConsumer step) {
+        LinearLayout card = column();
+        card.setBackground(rounded(WHITE, 16));
+        card.setClipToOutline(true);
+
+        boolean latest = month.equals(current);
+        LinearLayout navigation = row();
+        addPeriodArrow(navigation, "上个考勤月", false, hasPrevious, () -> step.accept(-1));
+        String periodName = month.getYear() + "年" + month.getMonthValue() + "月";
+        TextView period = action(periodName, INK, Color.TRANSPARENT, () -> pickDate(selected, date -> {
+            selected = date;
+            render();
+        }));
+        period.setTextSize(16);
+        navigation.addView(period, weight());
+        addPeriodArrow(navigation, "下个考勤月", true, !latest, () -> step.accept(1));
+        card.addView(navigation);
+
+        YearMonth first = Overtime.quarterStart(month);
+        MonthStats shown = monthStats(punches, month);
+        int quarterMinutes = 0;
+        int quarterDays = 0;
+        for (int index = 0; index < 3; index++) {
+            YearMonth periodMonth = first.plusMonths(index);
+            MonthStats stats = periodMonth.equals(month) ? shown : monthStats(punches, periodMonth);
+            quarterMinutes += stats.minutes;
+            quarterDays += stats.days;
+        }
+
+        LinearLayout body = column();
+        body.setPadding(dp(16), 0, dp(16), dp(10));
+        int remaining = Overtime.remaining(today);
+        boolean showCountdown = latest && remaining > 0;
+        body.addView(text("本月加班", 13, MUTED, false));
+        LinearLayout metrics = row();
+        metrics.setBaselineAligned(false);
+        String hours = Integer.toString(shown.minutes / 60) + (shown.minutes % 60 == 0 ? "" : ".5");
+        TextView amount = overviewValue(shown.days == 0 ? "—" : hours, shown.days == 0 ? "" : "h", 68, GREEN);
+        metrics.addView(amount, weight());
+
+        if (showCountdown) {
+            LinearLayout settlement = column();
+            settlement.setGravity(Gravity.END);
+            settlement.addView(text("距本期结算", 13, MUTED, false));
+            settlement.addView(overviewValue(Integer.toString(remaining), "天", 42, INK));
+            metrics.addView(settlement);
         } else {
-            YearMonth next = Overtime.period(selected).plusMonths(range == Range.MONTH ? direction : 3L * direction);
-            selected = Overtime.end(next);
-            if (selected.isAfter(Overtime.today())) {
-                selected = Overtime.today();
+            metrics.addView(text(latest ? "今天结算" : "已结算", 14, MUTED, false));
+        }
+        body.addView(metrics);
+
+        addMonthProgress(body, shown.minutes);
+        LinearLayout periodDetail = row();
+        String coverage = shown.days == 0 ? "暂无有效打卡" : "已统计 " + shown.days + " 天";
+        String dates = dateSpan(Overtime.start(month), Overtime.end(month));
+        periodDetail.addView(text(dates + " · " + coverage, 12, MUTED, false), weight());
+        String reference = compactDuration(MONTH_REFERENCE_MINUTES);
+        String progressLabel = reference + " 月度参照";
+        if (shown.days > 0) {
+            int gap = MONTH_REFERENCE_MINUTES - shown.minutes;
+            progressLabel = gap > 0 ? "距 " + reference + " 参照还差 " + compactDuration(gap)
+                    : "已达 " + reference + " 参照";
+        }
+        periodDetail.addView(text(progressLabel, 12, MUTED, false));
+        add(body, periodDetail, 5);
+        card.addView(body);
+
+        View divider = new View(this);
+        divider.setBackgroundColor(LINE);
+        LinearLayout.LayoutParams dividerParams = new LinearLayout.LayoutParams(-1, dp(1));
+        dividerParams.setMargins(dp(16), 0, dp(16), 0);
+        card.addView(divider, dividerParams);
+
+        LinearLayout quarter = row();
+        quarter.setPadding(dp(16), dp(11), dp(16), dp(11));
+        int quarterNumber = (first.getMonthValue() - 1) / 3 + 1;
+        String prefix = "第 " + quarterNumber + " 季度　月均 ";
+        SpannableString average = new SpannableString(prefix
+                + (quarterDays == 0 ? "—" : compactDuration(quarterMinutes / 3)));
+        average.setSpan(new RelativeSizeSpan(20f / 13), prefix.length(), average.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        average.setSpan(new StyleSpan(Typeface.BOLD), prefix.length(), average.length(),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        TextView quarterAverage = text("", 13, INK, false);
+        quarterAverage.setText(average);
+        quarter.addView(quarterAverage, weight());
+        String total = "累计 " + (quarterDays == 0 ? "—" : compactDuration(quarterMinutes));
+        quarter.addView(text(total, 13, MUTED, false));
+        card.addView(quarter);
+        return card;
+    }
+
+    private TextView overviewValue(String number, String unit, int size, int color) {
+        TextView value = text(number, size, color, true);
+        value.setTypeface(Typeface.create("sans-serif-condensed", Typeface.BOLD));
+        value.setLetterSpacing(-0.025f);
+        value.setIncludeFontPadding(false);
+        if (!unit.isEmpty()) {
+            SpannableString label = new SpannableString(number + "\u00a0" + unit);
+            label.setSpan(new RelativeSizeSpan(16f / size), number.length(), label.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            label.setSpan(new ForegroundColorSpan(MUTED), number.length(), label.length(),
+                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            value.setText(label);
+        }
+        return value;
+    }
+
+    private MonthStats monthStats(NavigableMap<LocalDate, Records.Punch> punches, YearMonth month) {
+        MonthStats stats = new MonthStats();
+        for (Map.Entry<LocalDate, Records.Punch> entry : punches
+                .subMap(Overtime.start(month), true, Overtime.end(month), true).entrySet()) {
+            int minutes = minutes(entry.getKey(), entry.getValue());
+            if (minutes >= 0) {
+                stats.minutes += minutes;
+                stats.days++;
             }
         }
-        render();
+        return stats;
+    }
+
+    private void addMonthProgress(LinearLayout summary, int minutes) {
+        View track = new View(this);
+        ClipDrawable progress = new ClipDrawable(rounded(GREEN, 3), Gravity.START, ClipDrawable.HORIZONTAL);
+        track.setBackground(new LayerDrawable(new Drawable[]{rounded(LINE, 3), progress}));
+        progress.setLevel(Math.min(minutes, MONTH_REFERENCE_MINUTES) * 10000 / MONTH_REFERENCE_MINUTES);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(5));
+        params.topMargin = dp(7);
+        summary.addView(track, params);
+    }
+
+    private void showSettings() {
+        Dialog drawer = new Dialog(this);
+        drawer.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        LinearLayout sheet = column();
+        sheet.setBackgroundColor(BG);
+        LinearLayout header = row();
+        header.setPadding(dp(24), dp(12), dp(12), dp(4));
+        header.addView(text("设置", 24, INK, true), weight());
+        addIcon(header, R.drawable.ic_overview_close, "关闭设置侧边栏", drawer::dismiss);
+        sheet.addView(header);
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout settings = column();
+        settings.setPadding(dp(16), 0, dp(16), dp(24));
+        scroll.addView(settings);
+        sheet.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        LinearLayout data = settingsSection(settings, "考勤数据");
+        if (oaSession == null) {
+            data.addView(settingLink("刷新本月考勤", () -> {
+                drawer.dismiss();
+                refreshOa();
+            }));
+            data.addView(settingLink("导入考勤记录", () -> {
+                drawer.dismiss();
+                showOaImport();
+            }));
+        }
+        boolean loggedIn = credentials.remembered();
+        data.addView(settingLink(loggedIn ? "OA 账号设置" : "登录 OA", () -> {
+            drawer.dismiss();
+            if (loggedIn) {
+                showOaSettings();
+            } else {
+                refreshOa();
+            }
+        }));
+        String lastSync = ReminderWorker.state(this).getString(ReminderWorker.LAST_SYNC, "");
+        if (!lastSync.isEmpty()) {
+            TextView status = text(lastSync, 12, MUTED, false);
+            status.setPadding(dp(8), 0, dp(8), 0);
+            add(settings, status, 6);
+        }
+
+        LinearLayout notifications = settingsSection(settings, "通知与提醒");
+        addScheduleSetting(notifications, false, "昨日考勤更新通知", "自动刷新时间");
+        addSettingsDivider(notifications, 0);
+        addScheduleSetting(notifications, true, "工作日打卡提醒", "提醒时间");
+        addSettingsDivider(notifications, 0);
+        notifications.addView(settingLink("系统通知设置", () -> {
+            drawer.dismiss();
+            notificationSettings();
+        }));
+        add(settings, settingLink("统计规则", () -> {
+            drawer.dismiss();
+            showRules();
+        }), 12);
+
+        drawer.setContentView(sheet);
+        drawer.setCanceledOnTouchOutside(true);
+        Window window = drawer.getWindow();
+        window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        window.setWindowAnimations(R.style.SettingsDrawerAnimation);
+        window.setGravity(Gravity.START | Gravity.TOP);
+        int width = Math.min(312, getResources().getConfiguration().screenWidthDp - 64);
+        window.setLayout(dp(width), LinearLayout.LayoutParams.MATCH_PARENT);
+        drawer.show();
+    }
+
+    private void addScheduleSetting(LinearLayout settings, boolean punch, String notice, String schedule) {
+        Switch toggle = new Switch(this);
+        toggle.setText(notice);
+        toggle.setTextColor(INK);
+        toggle.setTextSize(14);
+        toggle.setMinHeight(dp(48));
+        toggle.setPadding(dp(12), 0, dp(12), 0);
+        toggle.setChecked(ReminderWorker.noticeEnabled(this, punch));
+        TextView status = text("系统通知设置已关闭此通知", 12, MUTED, false);
+        status.setPadding(dp(8), 0, dp(8), dp(5));
+        status.setVisibility(toggle.isChecked() && !ReminderWorker.allowed(this, punch) ? View.VISIBLE : View.GONE);
+        toggle.setOnCheckedChangeListener((button, enabled) -> {
+            ReminderWorker.setNoticeEnabled(this, punch, enabled);
+            boolean blocked = enabled && !ReminderWorker.allowed(this, punch);
+            status.setVisibility(blocked ? View.VISIBLE : View.GONE);
+            if (blocked) {
+                notificationSettings();
+            }
+        });
+        settings.addView(toggle);
+        add(settings, status, 0);
+        int time = punch ? ReminderWorker.punchMinutes(this) : ReminderWorker.scheduleMinutes(this);
+        TextView value = text(PunchTime.display(time), 14, GREEN, true);
+        add(settings, settingRow(schedule, value, MUTED, () -> {
+            int current = punch ? ReminderWorker.punchMinutes(this) : ReminderWorker.scheduleMinutes(this);
+            pickTime(punch ? "打卡提醒时间" : "每日自动刷新时间", current, current, minutes -> {
+                if (punch) {
+                    ReminderWorker.changePunchTime(this, minutes);
+                } else {
+                    ReminderWorker.changeTime(this, minutes);
+                }
+                value.setText(PunchTime.display(minutes));
+            });
+        }), 0);
+    }
+
+    private LinearLayout settingsSection(LinearLayout parent, String title) {
+        TextView heading = text(title, 15, INK, true);
+        heading.setPadding(dp(8), 0, 0, 0);
+        add(parent, heading, 16);
+        LinearLayout group = column();
+        group.setPadding(dp(4), 0, dp(4), 0);
+        group.setBackground(rounded(WHITE, 16));
+        group.setClipToOutline(true);
+        add(parent, group, 8);
+        return group;
+    }
+
+    private LinearLayout settingLink(String label, Runnable click) {
+        ImageView arrow = new ImageView(this);
+        arrow.setImageResource(R.drawable.ic_overview_chevron);
+        arrow.setScaleX(-1);
+        arrow.setColorFilter(MUTED);
+        arrow.setLayoutParams(new LinearLayout.LayoutParams(dp(16), dp(16)));
+        return settingRow(label, arrow, INK, click);
+    }
+
+    private LinearLayout settingRow(String label, View value, int color, Runnable click) {
+        LinearLayout item = row();
+        item.setPadding(dp(12), 0, dp(12), 0);
+        item.setMinimumHeight(dp(48));
+        item.setBackground(clickable(Color.TRANSPARENT, 10));
+        item.addView(text(label, 14, color, false), weight());
+        item.addView(value);
+        item.setOnClickListener(view -> click.run());
+        return item;
+    }
+
+    private void addSettingsDivider(LinearLayout settings, int gap) {
+        addDivider(settings, gap, LINE);
+    }
+
+    private void addDivider(LinearLayout parent, int gap, int color) {
+        View divider = new View(this);
+        divider.setBackgroundColor(color);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, dp(1));
+        params.topMargin = dp(gap);
+        parent.addView(divider, params);
     }
 
     private void addAttendanceDetails(NavigableMap<LocalDate, Records.Punch> punches, LocalDate today) {
-        LinearLayout card = panel(WHITE, 18);
+        LinearLayout card = panel(WHITE, 16);
         LinearLayout line = row();
         LinearLayout detail = column();
         TextView dateLabel = text("", 14, INK, true);
         TextView times = text("", 14, MUTED, false);
+        TextView overtime = text("", 14, GREEN, true);
         detail.addView(dateLabel);
-        add(detail, times, 5);
+        add(detail, times, 4);
+        add(detail, overtime, 4);
         line.addView(detail, weight());
-        line.addView(action("编辑", GREEN, PALE, () -> edit(detailDate, date -> detailDate = date)));
+        TextView editButton = action("编辑", GREEN, PALE, () -> edit(detailDate, date -> detailDate = date));
+        line.addView(editButton);
         Consumer<LocalDate> showDate = date -> {
             detailDate = date;
             Records.Punch punch = punches.get(date);
-            dateLabel.setText(date + " | " + dayDescription(date));
+            dateLabel.setText(date + " · " + dayDescription(date));
             times.setText(punch == null ? "上班 无　下班 无"
                     : "上班 " + clockOrDash(punch.arrival) + "　下班 " + clockOrDash(punch.departure));
+            overtime.setText(punch == null ? "无打卡记录"
+                    : "当日加班  " + AttendanceHeatmap.overtimeLabel(punch, minutes(date, punch)));
+            editButton.setText(punch == null ? "补录" : "编辑");
         };
         showDate.accept(detailDate);
         heatmap = new AttendanceHeatmap(this, punches, today, detailDate, heatmapOffset, showDate);
         card.addView(heatmap);
+        addSettingsDivider(card, 14);
         add(card, line, 12);
         add(root, card, 8);
     }
@@ -321,7 +565,8 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("统计规则")
                 .setMessage("每月 26 日至次月 25 日，以结束月份归入季度。剩余天数按自然日计算，今天不计入剩余。\n\n"
                         + "工作日和调休补班日从 18:30 起计。周末和节假日休息日按上下班时间差计算，扣除与 12:00–13:00 和 18:00–18:30 重合的时段。\n\n"
-                        + "每天满 1 小时才计入，随后的时长向下取整到半小时。内置 2025–2027 年官方放假和调休安排，其他年份按自然星期计算。")
+                        + "每天满 1 小时才计入，随后的时长向下取整到半小时。内置 2025–2027 年官方放假和调休安排，其他年份按自然星期计算。\n\n"
+                        + "季度月均加班按季度累计时长除以 3 计算。")
                 .setPositiveButton("知道了", null).show();
     }
 
@@ -340,10 +585,6 @@ public final class MainActivity extends Activity {
         dialog.getDatePicker().setMaxDate(Overtime.today().plusDays(1)
                 .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() - 1);
         dialog.show();
-    }
-
-    private void edit(LocalDate date) {
-        edit(date, updated -> selected = updated);
     }
 
     private void edit(LocalDate date, Consumer<LocalDate> afterSave) {
@@ -565,7 +806,6 @@ public final class MainActivity extends Activity {
                     String message = result.describeImport(from, through, days, refresh);
                     ReminderWorker.state(MainActivity.this).edit().putString(ReminderWorker.LAST_SYNC, message).apply();
                     selected = through;
-                    range = Range.MONTH;
                     render();
                 }
 
@@ -630,8 +870,17 @@ public final class MainActivity extends Activity {
         return minutes / 60 + " 小时" + (minutes % 60 == 0 ? "" : " 30 分");
     }
 
+    private static String compactDuration(int minutes) {
+        int remainder = minutes % 60;
+        String hours = Integer.toString(minutes / 60);
+        if (remainder == 30) {
+            return hours + ".5h";
+        }
+        return hours + "h" + (remainder == 0 ? "" : " " + remainder + "m");
+    }
+
     private static String dateSpan(LocalDate from, LocalDate to) {
-        return from.format(DATE_SHORT) + " – " + to.format(DATE_SHORT);
+        return from.format(DATE_SHORT) + "–" + to.format(DATE_SHORT);
     }
 
     private void toast(String message) {
@@ -656,6 +905,47 @@ public final class MainActivity extends Activity {
             button.setOnClickListener(view -> click.run());
         }
         return button;
+    }
+
+    private ImageButton addIcon(LinearLayout parent, int icon, String label, Runnable click) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(icon);
+        button.setColorFilter(INK);
+        button.setContentDescription(label);
+        button.setBackground(clickable(Color.TRANSPARENT, 10));
+        button.setOnClickListener(view -> click.run());
+        parent.addView(button, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        return button;
+    }
+
+    private void addPeriodArrow(LinearLayout parent, String label, boolean next, boolean enabled, Runnable click) {
+        ImageButton arrow = addIcon(parent, R.drawable.ic_overview_chevron, label, click);
+        if (next) {
+            arrow.setScaleX(-1);
+        }
+        arrow.setEnabled(enabled);
+        arrow.setAlpha(enabled ? 1f : 0.38f);
+    }
+
+    private final class PeriodPager extends ViewPager {
+        PeriodPager() {
+            super(MainActivity.this);
+        }
+
+        @Override
+        protected void onMeasure(int widthSpec, int heightSpec) {
+            // Populate adjacent pages first, then give them enough height for the largest card.
+            super.onMeasure(widthSpec, heightSpec);
+            int pageWidth = View.MeasureSpec.makeMeasureSpec(getMeasuredWidth(), View.MeasureSpec.EXACTLY);
+            int naturalHeight = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED);
+            int height = 0;
+            for (int index = 0; index < getChildCount(); index++) {
+                View page = getChildAt(index);
+                page.measure(pageWidth, naturalHeight);
+                height = Math.max(height, page.getMeasuredHeight());
+            }
+            super.onMeasure(widthSpec, View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+        }
     }
 
     private RippleDrawable clickable(int background, int radius) {

@@ -9,7 +9,8 @@ import java.time.temporal.ChronoUnit;
 
 final class Overtime {
     static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
-    static final LocalTime REMINDER = LocalTime.of(20, 30);
+    static final LocalTime REFRESH_TIME = LocalTime.of(9, 0);
+    static final LocalTime PUNCH_REMINDER_TIME = LocalTime.of(20, 30);
     static final int MISSING = -1;
     static final int MINUTES_PER_DAY = 24 * 60;
     static final int OVERNIGHT_CUTOFF = 4 * 60;
@@ -34,6 +35,14 @@ final class Overtime {
         return period.minusMonths((period.getMonthValue() - 1) % 3);
     }
 
+    static YearMonth shiftQuarter(YearMonth month, YearMonth current, int direction) {
+        YearMonth next = month.plusMonths(3L * direction);
+        if (quarterStart(next).isAfter(quarterStart(current))) {
+            return month;
+        }
+        return next.isAfter(current) ? current : next;
+    }
+
     static int remaining(LocalDate today) {
         return (int) ChronoUnit.DAYS.between(today, end(period(today)));
     }
@@ -42,6 +51,14 @@ final class Overtime {
         ZonedDateTime local = now.withZoneSameInstant(ZONE);
         ZonedDateTime target = local.toLocalDate().atTime(time).atZone(ZONE);
         return target.isAfter(local) ? target : target.plusDays(1);
+    }
+
+    static ZonedDateTime nextPunchReminder(ZonedDateTime now, LocalTime time) {
+        ZonedDateTime target = nextReminder(now, time);
+        while (ChinaWorkCalendar.day(target.toLocalDate()).rest) {
+            target = target.plusDays(1);
+        }
+        return target;
     }
 
     static boolean earlyDeparture(int minutes) {
