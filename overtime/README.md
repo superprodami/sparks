@@ -22,4 +22,4 @@ Android 8.1 及以上。导入公司 OA 打卡、手动补录、查看月度和�
 
 ## Releases
 
-从 [Overtime 1.5.9](https://github.com/superprodami/sparks/releases/tag/overtime-v1.5.9) 下载 APK。自动导入适用于当前配置的公司 OA。
+从 [Overtime 1.5.12](https://github.com/superprodami/sparks/releases/tag/overtime-v1.5.12) 下载 APK。自动导入适用于当前配置的公司 OA。

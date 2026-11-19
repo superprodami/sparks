@@ -31,6 +31,7 @@ import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.widget.EditText;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -162,7 +163,9 @@ public final class MainActivity extends Activity {
         scroll.setFillViewport(true);
         scroll.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         scroll.setBackgroundColor(BG);
-        scroll.setOnApplyWindowInsetsListener((view, insets) -> {
+        FrameLayout home = new FrameLayout(this);
+        home.setBackgroundColor(BG);
+        home.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 35) {
                 android.graphics.Insets safe = insets.getInsets(
                         WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
@@ -174,7 +177,8 @@ public final class MainActivity extends Activity {
         root = column();
         root.setPadding(dp(18), dp(4), dp(18), dp(12));
         scroll.addView(root);
-        setContentView(scroll);
+        home.addView(scroll);
+        setContentView(home);
         mainScroll = scroll;
         boolean showDetail = revealDetail;
         revealDetail = false;
@@ -807,6 +811,7 @@ public final class MainActivity extends Activity {
                     ReminderWorker.state(MainActivity.this).edit().putString(ReminderWorker.LAST_SYNC, message).apply();
                     selected = through;
                     render();
+                    showSyncResult(message);
                 }
 
                 @Override
@@ -881,6 +886,20 @@ public final class MainActivity extends Activity {
 
     private static String dateSpan(LocalDate from, LocalDate to) {
         return from.format(DATE_SHORT) + "–" + to.format(DATE_SHORT);
+    }
+
+    private void showSyncResult(String message) {
+        FrameLayout home = (FrameLayout) mainScroll.getParent();
+        TextView notice = text(message, 14, WHITE, false);
+        notice.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        notice.setGravity(Gravity.CENTER);
+        notice.setPadding(dp(16), dp(10), dp(16), dp(10));
+        notice.setBackground(rounded(INK, 12));
+        FrameLayout.LayoutParams layout = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        layout.setMargins(dp(16), dp(8), dp(16), 0);
+        home.addView(notice, layout);
+        notice.postDelayed(() -> home.removeView(notice), 4000);
     }
 
     private void toast(String message) {

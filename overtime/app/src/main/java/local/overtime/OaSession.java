@@ -30,7 +30,10 @@ import java.time.format.DateTimeParseException;
 final class OaSession {
     private static final String LOGIN = "https://oa.raynen.cn:8443/login.jsp";
     private static final String OA_ORIGIN = "https://oa.raynen.cn:8443";
+    private static final String HR_HOME = "http://ehr.raynen.cn:3039/hr/index.html";
     private static final long TIMEOUT = 45_000;
+    private static final long SAVED_SESSION_TIMEOUT = 5_500;
+    private static final long QUERY_TIMEOUT = 8_000;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static OaSession active;
 
@@ -43,6 +46,12 @@ final class OaSession {
 
     private final WebView view;
     private final Listener listener;
+    private final String queryScript;
+    private boolean tryingHrSession;
+    private boolean usePage;
+    private boolean queryCheckPending;
+    private int navigation;
+    private long queryDeadline;
     private final String portalScript;
     private final String attendanceScript;
     private final String pageSizeScript;
@@ -74,6 +83,8 @@ final class OaSession {
         this.listener = listener;
         this.from = from;
         this.through = through;
+        queryScript = script(context, "oa-query.js") + "(" + JSONObject.quote(from.toString()) + ","
+                + JSONObject.quote(through.toString()) + ")";
         portalScript = script(context, "oa-portal.js");
         attendanceScript = script(context, "oa-attendance.js");
         pageSizeScript = script(context, "oa-page-size.js");
@@ -106,6 +117,7 @@ final class OaSession {
 
             @Override
             public void onPageStarted(WebView webView, String url, Bitmap favicon) {
+                navigation++;
                 loaded = false;
                 if (!allowed(Uri.parse(url))) {
                     fail(outsideOrigin(Uri.parse(url)));
@@ -121,7 +133,11 @@ final class OaSession {
             @Override
             public void onReceivedError(WebView webView, WebResourceRequest request, WebResourceError error) {
                 if (request.isForMainFrame()) {
-                    fail("无法打开 OA 或人事系统，请检查网络后刷新。");
+                    if (tryingHrSession) {
+                        retryViaPortal();
+                    } else {
+                        fail("无法打开 OA 或人事系统，请检查网络后刷新。");
+                    }
                 }
             }
         });
@@ -144,7 +160,10 @@ final class OaSession {
             android.webkit.WebStorage.getInstance().deleteAllData();
             CookieManager.getInstance().removeAllCookies(ignored -> loadLogin());
         } else {
-            loadLogin();
+            tryingHrSession = true;
+            queryDeadline = SystemClock.uptimeMillis() + SAVED_SESSION_TIMEOUT;
+            view.loadUrl(HR_HOME);
+            requestCheck(200);
         }
     }
 
@@ -189,18 +208,78 @@ final class OaSession {
                     : "未能完成 OA 登录，请检查账号、密码和网络。");
             return;
         }
-        requestCheck(800);
+        if (tryingHrSession && SystemClock.uptimeMillis() >= queryDeadline && !queryCheckPending) {
+            retryViaPortal();
+            return;
+        }
+        requestCheck(usePage ? 800 : 200);
         String url = view.getUrl();
         if (!loaded || url == null) {
             return;
         }
         Uri current = Uri.parse(url);
         if (isOa(current)) {
+            tryingHrSession = false;
+            queryDeadline = 0;
             checkPortal(current);
         } else if (isHr(current)) {
-            authenticate();
-            readAttendance();
+            if (usePage) {
+                authenticate();
+                readAttendance();
+            } else {
+                queryAttendance();
+            }
         }
+    }
+
+    private void retryViaPortal() {
+        navigation++;
+        tryingHrSession = false;
+        queryDeadline = 0;
+        loaded = false;
+        loadLogin();
+    }
+
+    private void queryAttendance() {
+        if (queryCheckPending) {
+            return;
+        }
+        if (queryDeadline == 0) {
+            queryDeadline = SystemClock.uptimeMillis() + QUERY_TIMEOUT;
+        }
+        int currentNavigation = navigation;
+        queryCheckPending = true;
+        view.evaluateJavascript(queryScript, payload -> {
+            queryCheckPending = false;
+            if (active != this || currentNavigation != navigation) {
+                return;
+            }
+            try {
+                if (payload != null && !"null".equals(payload)) {
+                    JSONObject response = new JSONObject(payload);
+                    String state = response.getString("state");
+                    if ("ready".equals(state)) {
+                        OaResult result = new OaResult(response, today);
+                        authenticate();
+                        Log.i("AttendanceOA", "已通过日结果查询完成同步");
+                        success(result);
+                        return;
+                    }
+                    if (!"unavailable".equals(state) && SystemClock.uptimeMillis() < queryDeadline) {
+                        return;
+                    }
+                } else if (SystemClock.uptimeMillis() < queryDeadline) {
+                    return;
+                }
+            } catch (IOException | JSONException | DateTimeParseException error) {
+                // An unfamiliar grid format can still be read from the rendered page.
+            }
+            if (tryingHrSession) {
+                retryViaPortal();
+            } else {
+                usePage = true;
+            }
+        });
     }
 
     private void checkPortal(Uri uri) {
