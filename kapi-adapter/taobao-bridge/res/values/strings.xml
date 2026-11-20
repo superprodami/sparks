@@ -1,0 +1,4 @@
+<resources>
+  <string name="module_description">在 LSPosed 中启用后，打开京东或淘宝的已支付订单详情即可触发咔皮记账。适配模块无需单独授予 Root 权限。</string>
+  <string name="module_help">在 LSPosed 的「模块」中启用本适配，勾选咔皮和淘宝作为作用域。保留咔皮的无障碍服务，然后重新打开相关应用。\n\n打开京东或淘宝的已支付订单详情，在咔皮浮窗中确认记账。适配模块无需单独授予 Root 权限。\n\n已验证 LSPosed 2.2.1（7942）与原版咔皮 1.30.01。\n\n从 1.0.4 升级前，请先在旧版点击「停用并恢复」，解除旧版对咔皮安装文件的挂载。</string>
+</resources>

@@ -26,6 +26,11 @@ public final class NativeAdapter {
     private static final HashSet<String> inFlight = new HashSet<>();
 
     private static final WeakHashMap<Object, Boolean> detailVisits = new WeakHashMap<>();
+    private final ClassLoader loader;
+
+    public NativeAdapter(ClassLoader loader) {
+        this.loader = loader;
+    }
 
     public static void visit(Object resolver, String packageName, AccessibilityNodeInfo root) throws Exception {
         if (!TB.equals(packageName)) return;
@@ -50,8 +55,7 @@ public final class NativeAdapter {
         return false;
     }
 
-    public static boolean submit(final Object uploader, final Object request) throws Exception {
-        final ClassLoader loader = NativeAdapter.class.getClassLoader();
+    public boolean submit(final Object uploader, final Object request) throws Exception {
         Class<?> type = request.getClass();
         String packageName = (String) type.getMethod("getPackageName").invoke(request);
         if (!JD.equals(packageName) && !TB.equals(packageName)) return false;
@@ -116,10 +120,9 @@ public final class NativeAdapter {
         return true;
     }
 
-    private static void complete(Object uploader, Object request, String flowId, String orderId, String flightKey, String shop, String product,
+    private void complete(Object uploader, Object request, String flowId, String orderId, String flightKey, String shop, String product,
                                  SharedPreferences receipts, Object response) throws Exception {
         synchronized (inFlight) { inFlight.remove(flightKey); }
-        ClassLoader loader = NativeAdapter.class.getClassLoader();
         Throwable error = (Throwable) loader.loadClass("am.i0").getMethod("e", Object.class).invoke(null, response);
         if (error != null) {
             Log.e("KapiJD", "Native V2 text recording failed", error);
@@ -154,8 +157,8 @@ public final class NativeAdapter {
         uploader.getClass().getMethod("L", Object.class, String.class, Long.class).invoke(uploader, result, flow, null);
     }
 
-    private static void publishError(Object uploader, Object request, String flow, String code, String message) throws Exception {
-        Object error = NativeAdapter.class.getClassLoader().loadClass(MODEL + "AccountError")
+    private void publishError(Object uploader, Object request, String flow, String code, String message) throws Exception {
+        Object error = loader.loadClass(MODEL + "AccountError")
                 .getConstructor(String.class, Object.class, String.class, String.class, boolean.class)
                 .newInstance("accessible", request, code, message, false);
         publish(uploader, error, flow);
@@ -171,9 +174,8 @@ public final class NativeAdapter {
         Log.i("KapiJD", "Service flags=" + info.flags + ", accessibilityTool=" + info.isAccessibilityTool());
     }
 
-    public static void extend(List<Object> configs) throws Exception {
+    public void extend(List<Object> configs) throws Exception {
         extendTaobao(configs);
-        ClassLoader loader = NativeAdapter.class.getClassLoader();
         Class<?> config = loader.loadClass(MODEL + "AccessibilityConfig");
         for (Object item : configs) {
             if (JD.equals(config.getMethod("getPackageName").invoke(item))) return;
@@ -197,8 +199,7 @@ public final class NativeAdapter {
         Log.i("KapiJD", "Native JD scene injected; configured apps=" + configs.size());
     }
 
-    private static void extendTaobao(List<Object> configs) throws Exception {
-        ClassLoader loader = NativeAdapter.class.getClassLoader();
+    private void extendTaobao(List<Object> configs) throws Exception {
         Class<?> config = loader.loadClass(MODEL + "AccessibilityConfig");
         for (Object item : configs) {
             if ("com.taobao.taobao".equals(config.getMethod("getPackageName").invoke(item))) return;
