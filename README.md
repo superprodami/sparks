@@ -9,3 +9,4 @@
 | [咔皮记账 · 京东淘宝适配](kapi-adapter/) | 在已支付订单详情页触发咔皮记账 | [Android 1.0.5](https://github.com/superprodami/sparks/releases/tag/kapi-adapter-v1.0.5) |
 | [Reader](Reader/) | Windows 小说阅读器和辅助脚本 | [Windows 修改版](https://github.com/superprodami/sparks/releases/tag/reader-v2.0.0.4-mod.1) |
 | [番茄小说下载器](TomatoDownloader/) | 番茄小说下载器的上游入口 | [番茄下载器上游下载](https://github.com/POf-L/Fanqie-novel-Downloader/releases) |
+| [USEC 右键菜单](usec-right-click/) | 在 Nautilus 中为 SVN 更新、提交和日常编辑切换明文或密文模式 | [Ubuntu 20.04 安装说明](usec-right-click/#安装) |
