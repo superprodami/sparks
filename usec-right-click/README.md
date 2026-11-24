@@ -23,6 +23,24 @@ python3 install.py
 
 如果终端已是 `root`，第一行可去掉 `sudo`。等待进行中的文件操作完成，执行 `nautilus -q`，再重新打开「文件」。
 
+## 全局快捷键
+
+安装工具后，打开 Ubuntu 的「设置 → 键盘快捷键」，滚到最下方点「＋」。分别添加下面两项，把对应的一整行粘贴到「命令」栏，再点击「设置快捷键」并按下要绑定的组合键。
+
+**切换为明文**（例如 `Ctrl+Alt+P`）
+
+```bash
+sh -c 'if msg=$(/usr/bin/python3 "${XDG_DATA_HOME:-$HOME/.local/share}/usec-right-click/usec_mode_switch.py" "$1" 2>&1); then notify-send "USEC" "$msg"; else notify-send -u critical "USEC 切换失败" "$msg"; fi' usec plaintext
+```
+
+**切换为密文**（例如 `Ctrl+Alt+M`）
+
+```bash
+sh -c 'if msg=$(/usr/bin/python3 "${XDG_DATA_HOME:-$HOME/.local/share}/usec-right-click/usec_mode_switch.py" "$1" 2>&1); then notify-send "USEC" "$msg"; else notify-send -u critical "USEC 切换失败" "$msg"; fi' usec ciphertext
+```
+
+如果系统缺少 `notify-send`，执行 `sudo apt install libnotify-bin`。
+
 ## 卸载
 
 在同一账户下，进入源码目录执行以下命令，再重新打开「文件」。
